@@ -1,186 +1,166 @@
 # CX Reply Assistant — AI-Powered Customer Support Reply Tool
 
-A small, deployable app that lets a CX agent view a conversation, pull relevant
-brand policy info from a knowledge base, and generate an AI-assisted reply
-that is *grounded* in that knowledge base (with guardrails against
-hallucinated promises).
+A small, deployed application that lets a CX agent view a conversation, pull
+relevant brand policy information from a knowledge base, and generate an
+AI-assisted reply that is grounded in that knowledge base, with guardrails
+against confidently promising things the policy doesn't support.
+
+**Live app:** https://cx-reply-assistant-rmjo.vercel.app/
 
 ---
 
-## 0. What you need installed (one-time, on your machine)
+## What this covers
 
-| Tool | Why | Install |
-|---|---|---|
-| **Node.js 18+** | Run/build the React frontend | https://nodejs.org (LTS) |
-| **npm** | Comes with Node | included |
-| **Git** | Version control / push to GitHub | https://git-scm.com |
-| **Supabase CLI** | Local dev + deploy Edge Functions | `npm install -g supabase` |
-| **A Supabase account** | Free Postgres DB + Edge Functions + Auth | https://supabase.com |
-| **An OpenRouter account** | Free/cheap access to LLMs (Claude, GPT, Llama, etc.) via one API | https://openrouter.ai |
-| **A Vercel or Netlify account** | Free hosting for the frontend | https://vercel.com |
-
-Check installs:
-```bash
-node -v      # v18 or higher
-npm -v
-git --version
-supabase --version
-```
+| Requirement | Where |
+|---|---|
+| Conversation View (customer, brand, history, latest message, order info) | `src/components/ConversationView.jsx` |
+| Brand Knowledge Base (return/refund/shipping/cancellation) | `supabase/schema.sql` → `knowledge_base` table |
+| AI Reply Generation (identify brand → retrieve → context → LLM → display) | `supabase/functions/generate-reply/index.ts` |
+| Edit / Regenerate / Approve | `src/components/ReplyPanel.jsx` |
+| AI Guardrails | Retrieval-grounded prompt + strict system prompt + no-context fallback |
+| Data & Logging (message, context, AI response, edits, final, timestamp) | `reply_logs` table, written on every generate and approve |
 
 ---
 
-## 1. Clone / open this project
+## Tech stack
+
+- **Frontend:** React (Vite)
+- **Backend:** Supabase Edge Functions
+- **Database:** Supabase Postgres
+- **LLM:** OpenRouter (`anthropic/claude-haiku-4.5`)
+
+---
+
+## Prerequisites
+
+| Tool | Install |
+|---|---|
+| Node.js 18+ | https://nodejs.org (LTS) |
+| npm | included with Node |
+| Git | https://git-scm.com |
+| Supabase CLI | `npm install supabase --save-dev` (use `npx supabase` to run commands) |
+| Supabase account | https://supabase.com |
+| OpenRouter account | https://openrouter.ai |
+| Vercel account | https://vercel.com |
+
+---
+
+## Setup
 
 ```bash
+git clone <this-repo-url>
 cd cx-reply-assistant
 npm install
 ```
 
----
+### 1. Create a Supabase project
+Go to https://supabase.com/dashboard → **New Project**. From
+**Settings → API**, copy:
+- **Project URL** → `VITE_SUPABASE_URL`
+- **Publishable / anon public key** → `VITE_SUPABASE_ANON_KEY`
 
-## 2. Create your Supabase project
+### 2. Run the schema
+Open the **SQL Editor** in your Supabase project, paste the full contents
+of `supabase/schema.sql`, and run it. This creates all tables and seeds
+mock data for one brand ("HydroBottle Co.") — a customer, an order, a
+conversation, and 4 KB policy entries matching the scenario described in
+the assessment.
 
-1. Go to https://supabase.com/dashboard → **New Project**.
-2. Note down (Project Settings → API):
-   - `Project URL` → this is `VITE_SUPABASE_URL`
-   - `anon public` key → this is `VITE_SUPABASE_ANON_KEY`
-   - `service_role` key (keep secret, used only server-side)
+### 3. Get an OpenRouter API key
+https://openrouter.ai 
 
-3. Open the **SQL Editor** in the Supabase dashboard, paste the contents of
-   `supabase/schema.sql`, and run it. This creates:
-   - `brands`
-   - `knowledge_base`
-   - `customers`
-   - `orders`
-   - `conversations`
-   - `messages`
-   - `reply_logs` (the audit/logging table)
-
-   It also inserts mock data for one brand ("HydroBottle Co.") with a
-   customer, an order, a conversation, and 4 KB policy entries — enough to
-   run the exact scenario in the assessment ("My order was delivered but
-   the bottle is broken...").
-
----
-
-## 3. Get an OpenRouter API key
-
-1. Sign up at https://openrouter.ai → **Keys** → **Create Key**.
-2. Copy it. You'll use a free/cheap model, e.g. `anthropic/claude-4.5-haiku` (paid, small cost).
-
----
-
-## 4. Configure environment variables
-
-Copy `.env.example` to `.env` and fill in:
-
+### 4. Configure environment variables
 ```bash
 cp .env.example .env
 ```
-
+Fill in:
 ```
-VITE_SUPABASE_URL=https://YOUR-PROJECT.supabase.co
-VITE_SUPABASE_ANON_KEY=your-anon-key
+VITE_SUPABASE_URL=https://zwnqyiagffgysgsolxsr.supabase.co
+VITE_SUPABASE_ANON_KEY=sb_publishable_qSL5cDLHCUjkwh_QQ6azTw__06bQUtx
 ```
-
-The OpenRouter key does **NOT** go in the frontend `.env` — it goes into
-Supabase Edge Function secrets (server-side only, so it's never exposed to
-the browser):
-
+The OpenRouter key is set as a server-side Edge Function secret, so it's
+never exposed to the browser:
 ```bash
-supabase login
-supabase link --project-ref YOUR-PROJECT-REF
-supabase secrets set OPENROUTER_API_KEY=sk-or-xxxxxxxx
+npx supabase login
+npx supabase link --project-ref 
+npx supabase secrets set OPENROUTER_API_KEY
+npx supabase secrets set OPENROUTER_MODEL=anthropic/claude-haiku-4.5
 ```
+
+### 5. Deploy the Edge Function
+```bash
+npx supabase functions deploy generate-reply --no-verify-jwt
+```
+`--no-verify-jwt` is used for assessment/demo simplicity. In production,
+this would verify the agent's Supabase Auth JWT and check brand membership
+before processing — covered in the architecture document.
 
 ---
 
-## 5. Deploy the Edge Function (this does the AI reply generation)
-
-```bash
-supabase functions deploy generate-reply --no-verify-jwt
-```
-
-`--no-verify-jwt` is used here for simplicity (assessment/demo purposes).
-In production you'd verify the agent's Supabase Auth JWT (see architecture
-doc for details).
-
-Test it directly:
-```bash
-curl -i --location --request POST \
-  'https://zwnqyiagffgysgsolxsr.supabase.co/functions/v1/generate-reply' \
-  --header 'Content-Type: application/json' \
-  --data '{"conversation_id":"REPLACE-WITH-ID-FROM-SEED-DATA"}'
-```
-
----
-
-## 6. Run the frontend locally
+## Run locally
 
 ```bash
 npm run dev
 ```
-Open http://localhost:5173
-
-You should see:
-- Customer name, brand, order info, conversation history, latest message
-- A **Generate Reply** button
-- After generating: an editable textarea, **Regenerate**, and **Approve** buttons
+Open http://localhost:5173. You should see the conversation, a **Generate
+Reply** button, and after generating: an editable textarea, **Regenerate**,
+and **Approve**.
 
 ---
 
-## 7. Deploy the frontend (publicly accessible URL)
+## Deploy the frontend
 
-**Vercel (recommended, easiest):**
 ```bash
 npm install -g vercel
 vercel
 ```
-When prompted, add the two `VITE_*` env vars in the Vercel dashboard
-(Project → Settings → Environment Variables), then `vercel --prod`.
-
-**Or Netlify:**
+Add `VITE_SUPABASE_URL` and `VITE_SUPABASE_ANON_KEY` in the Vercel
+dashboard (Project → Settings → Environment Variables), then:
 ```bash
-npm run build
-netlify deploy --prod --dir=dist
+vercel --prod
 ```
 
 ---
 
-## 8. How the AI guardrails work (Core Requirement #4)
+## How the AI guardrails work
 
-The Edge Function (`supabase/functions/generate-reply/index.ts`) does this:
+The Edge Function (`supabase/functions/generate-reply/index.ts`):
 
-1. **Retrieval, not free recall**: it fetches only the KB rows for the
-   matched brand and does light keyword scoring so the most relevant
-   policy sections are sent to the model — the model is never allowed to
-   "know" policy from its own training.
-2. **Strict system prompt**: the model is instructed to answer *only*
-   using the provided KB text, and if the KB doesn't clearly cover the
-   customer's exact situation (e.g. dates, exceptions), to say it needs to
-   confirm with the team rather than promising an outcome.
-3. **Order-date cross-check**: before calling the LLM, the function
-   computes `days_since_delivery` from order data and passes it explicitly
-   as a fact — so the model isn't left to do date math itself (a common
-   hallucination source).
-4. **No-context fallback**: if retrieval returns nothing relevant, the
-   function skips the LLM call entirely and returns a canned
-   "I don't have enough information — escalating" message.
-
-This is intentionally a prompt/context-engineering guardrail rather than a
-fine-tuned classifier — appropriate for the scope of this assessment. The
-architecture doc explains how this would evolve at scale (e.g. a
-verification/critic pass, confidence scoring, eval suite).
+1. **Retrieval, not free recall** — fetches only knowledge base entries for
+   the matched brand, scored for relevance, so the most relevant policy
+   sections are sent to the model. The model never answers from its own
+   training knowledge of "typical" return policies.
+2. **Strict system prompt** — instructs the model to answer only from the
+   provided knowledge base text, and if the customer's exact situation
+   isn't clearly covered, to acknowledge the issue and say it needs
+   confirmation rather than promising an outcome.
+3. **Order-date cross-check computed in code** — `days_since_delivery` is
+   calculated server-side and handed to the model as a stated fact, so the
+   model isn't doing date math itself.
+4. **No-context fallback** — if retrieval returns nothing relevant, the
+   function skips the LLM call entirely and returns a fixed escalation
+   message instead of guessing.
 
 ---
 
-## 9. Project structure
+## Data & Logging
+
+Every **Generate Reply** call inserts a row into `reply_logs`:
+`customer_message`, `retrieved_context`, `ai_generated_response`, `status`,
+`created_at`. Every **Approve** click updates that same row with
+`agent_edited_response`, `final_response`, `status = 'approved'`,
+`updated_at`.
+
+---
+
+## Project structure
 
 ```
 cx-reply-assistant/
 ├── README.md
 ├── .env.example
 ├── package.json
+├── vite.config.js
 ├── index.html
 ├── src/
 │   ├── main.jsx
@@ -190,8 +170,19 @@ cx-reply-assistant/
 │       ├── ConversationView.jsx
 │       └── ReplyPanel.jsx
 └── supabase/
-    ├── schema.sql                     # DB schema + seed/mock data
+    ├── schema.sql
     └── functions/
         └── generate-reply/
-            └── index.ts               # Edge Function: retrieval + LLM call + logging
+            └── index.ts
 ```
+
+---
+
+## One thing I'd improve with more time
+
+Retrieval currently uses keyword scoring rather than a real vector search.
+That's sufficient at this scale (one brand, four policy entries) but
+wouldn't hold up with hundreds of brands and larger knowledge bases, where
+semantically similar but differently worded questions would get missed.
+The architecture document covers moving this to a vector store (e.g.
+Qdrant) with per-brand partitioning.
