@@ -48,7 +48,7 @@ against confidently promising things the policy doesn't support.
 ## Setup
 
 ```bash
-git clone <this-repo-url>
+git clone <>
 cd cx-reply-assistant
 npm install
 ```
